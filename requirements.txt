@@ -1,0 +1,12 @@
+# Zależności dla skryptu RAG (build_rag_index.py)
+chromadb
+llama-index-core
+llama-index-vector-stores-chroma
+llama-index-embeddings-huggingface
+sentence-transformers
+
+# Zależności dla skryptu LoRA (train_lora.py)
+# Unsloth, torch, transformers, peft, bitsandbytes, accelerate
+# są już w obrazie bazowym, więc potrzeba tylko:
+datasets
+trl

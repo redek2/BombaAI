@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+
+# --- Project Bomba AI (Data and models) ---
+audio/
+*.mp3
+*.wav
+data/
+*.jsonl
+
+chroma_db/
+
+lora_adapter/
+models/
+huggingface-cache/
+
+# --- Cache and logs ---
+unsloth_compiled_cache/
+wandb/
+
+# --- Binaries and tools ---
+ffmpeg.exe
+*.exe
+
+
+cookies.txt
+cookies_opera.txt
+
+# --- IDE and System ---
+.vscode/
+.idea/
+.DS_Store
