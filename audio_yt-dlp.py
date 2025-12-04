@@ -5,8 +5,8 @@ import os
 load_dotenv()
 
 OPERA_COOKIES_PATH = os.getenv("OPERA_COOKIES_PATH")
-AUDIO_OUTPUT_DIR = os.getenv("AUDIO_OUTPUT_DIR", "audio")
-path_template = f"{AUDIO_OUTPUT_DIR}/%(title)s.%(ext)s"
+AUDIO_SET = os.getenv("AUDIO_SET", "audio")
+path_template = f"{AUDIO_SET}/%(title)s.%(ext)s"
 
 def audio_yt_dlp(yt_link):
     ydl_opts = {
