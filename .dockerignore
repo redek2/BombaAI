@@ -1,0 +1,21 @@
+# Ignoruj środowisko wirtualne (Docker tworzy własne)
+.venv
+.env
+
+# Ignoruj pliki Gita i IDE
+.git
+.idea
+.vscode
+__pycache__
+
+# Ignoruj wielkie dane (będziemy je mapować przez Volumes, nie chcemy ich w obrazie)
+audio
+huggingface-cache
+unsloth_compiled_cache
+wandb
+chroma_db
+
+# Ignoruj dane tymczasowe/wynikowe (opcjonalnie, przyspiesza build)
+transcriptions
+transcriptions_clean
+lore_extracted

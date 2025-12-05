@@ -1,9 +1,12 @@
 # Zależności dla skryptu RAG (build_rag_index.py)
 chromadb
+llama-index
 llama-index-core
 llama-index-vector-stores-chroma
 llama-index-embeddings-huggingface
 sentence-transformers
+python-dotenv
+tqdm
 
 # Zależności dla skryptu LoRA (train_lora.py)
 # Unsloth, torch, transformers, peft, bitsandbytes, accelerate
