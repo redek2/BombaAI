@@ -1,106 +1,212 @@
 import chromadb
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext
+import json
+import os
+import shutil
+import sys
+import torch
+from tqdm import tqdm
+from typing import List, Dict, Any
+
+from llama_index.core import VectorStoreIndex, Document, StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.core.node_parser import TokenTextSplitter
-from transformers import AutoTokenizer
-import sys
-import os
 
-# --- Configuration ---
-INPUT_FILE = "data/RAG_FANDOM_DATA_CLEAN.txt"
-DB_DIRECTORY = "./chroma_db"  # Directory to save the persistent database
+# --- KONFIGURACJA ---
+INPUT_DIR = "lore_extracted"
+DB_DIRECTORY = "./chroma_db"
 EMBED_MODEL_NAME = "sdadas/mmlw-retrieval-roberta-large"
-CHUNK_SIZE = 512  # The size of each text "chunk" in tokens
-CHUNK_OVERLAP = 32  # How much overlap between chunks
 
 
-def build_persistent_index():
+def get_optimal_device() -> str:
     """
-    Builds a persistent vector index from our data file and saves it to disk.
+    Dynamicznie dobiera urządzenie obliczeniowe.
+    Unika hardcodowania 'cuda', co zapobiega błędom na CPU/Mac.
     """
-    print(f"--- Starting Index Build ---")
+    if torch.cuda.is_available():
+        return "cuda"
+    # Opcjonalnie: można dodać obsługę 'mps' dla Mac M1/M2/M3
+    # if torch.backends.mps.is_available():
+    #     return "mps"
+    return "cpu"
 
-    # Check if the input file exists
-    if not os.path.exists(INPUT_FILE):
-        print(f"Error: Input file not found: {INPUT_FILE}", file=sys.stderr)
-        print("Please make sure the file exists in the same directory.", file=sys.stderr)
+
+def _create_doc(text: str, specific_metadata: Dict[str, Any], base_metadata: Dict[str, Any]) -> Document:
+    """
+    Helper function (DRY): Tworzy obiekt Document łącząc metadane bazowe i specyficzne.
+    """
+    # Kopiujemy słownik, aby uniknąć mutacji referencji (częsty błąd w Pythonie)
+    meta = base_metadata.copy()
+    meta.update(specific_metadata)
+
+    # Zabezpieczenie przed pustym tekstem (na wypadek błędów logicznych)
+    if not text or not isinstance(text, str):
+        text = "Empty content"
+
+    return Document(text=text, metadata=meta)
+
+
+def load_documents_from_json(directory: str) -> List[Document]:
+    """
+    Wczytuje pliki JSON i konwertuje je na semantyczne dokumenty LlamaIndex.
+    Zawiera obsługę błędów (try-except) i bezpieczny dostęp do danych (.get).
+    """
+    llama_documents = []
+
+    # Sprawdzenie czy katalog istnieje
+    if not os.path.exists(directory):
+        print(f"BŁĄD: Katalog {directory} nie istnieje.")
+        return []
+
+    files = [f for f in os.listdir(directory) if f.endswith(".json")]
+    print(f"Przetwarzanie {len(files)} plików JSON na semantyczne dokumenty...")
+
+    for filename in tqdm(files):
+        path = os.path.join(directory, filename)
+
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Bezpieczne pobieranie metadanych podstawowych
+            base_metadata = {
+                "episode_id": data.get("episode_id", "Unknown"),
+                "title": data.get("title", "Unknown"),
+                "source_file": filename
+            }
+
+            # 1. SYNOPSIS
+            synopsis_text = data.get("synopsis")
+            if synopsis_text:
+                llama_documents.append(_create_doc(
+                    text=synopsis_text,
+                    specific_metadata={"type": "synopsis"},
+                    base_metadata=base_metadata
+                ))
+
+            # 2. LORE FACTS
+            for fact in data.get("lore_facts", []):
+                # Używamy .get() dla bezpieczeństwa
+                cat = fact.get("category", "General")
+                content = fact.get("fact", "")
+
+                if content:
+                    llama_documents.append(_create_doc(
+                        text=f"Fakt ({cat}): {content}",
+                        specific_metadata={"type": "lore_fact", "category": cat},
+                        base_metadata=base_metadata
+                    ))
+
+            # 3. CHARACTER ACTIONS
+            for char in data.get("character_actions", []):
+                name = char.get("name", "Unknown")
+                role = char.get("role_in_episode", "")
+                traits = ", ".join(char.get("traits_exhibited", []))
+
+                text_content = f"Postać: {name}. Rola: {role} Cechy: {traits}."
+
+                llama_documents.append(_create_doc(
+                    text=text_content,
+                    specific_metadata={"type": "character_profile", "character": name},
+                    base_metadata=base_metadata
+                ))
+
+            # 4. QUOTES
+            quotes_data = data.get("quotes", {})
+
+            # Attributed Quotes
+            for quote in quotes_data.get("attributed_quotes", []):
+                speaker = quote.get("speaker", "Unknown")
+                text = quote.get("text", "")
+                context = quote.get("context", "")
+                confidence = quote.get("confidence", "Medium")
+
+                text_content = f"{speaker} powiedział: \"{text}\""
+                if context:
+                    text_content += f" (Kontekst: {context})"
+
+                llama_documents.append(_create_doc(
+                    text=text_content,
+                    specific_metadata={
+                        "type": "quote",
+                        "speaker": speaker,
+                        "confidence": confidence
+                    },
+                    base_metadata=base_metadata
+                ))
+
+            # Unattributed Gems
+            for gem in quotes_data.get("unattributed_gems", []):
+                if gem:  # Ignoruj puste stringi
+                    llama_documents.append(_create_doc(
+                        text=f"Cytat z uniwersum: \"{gem}\"",
+                        specific_metadata={"type": "quote_unattributed"},
+                        base_metadata=base_metadata
+                    ))
+
+        except json.JSONDecodeError:
+            print(f"\nBŁĄD: Plik {filename} jest uszkodzonym JSON-em. Pomijam.", file=sys.stderr)
+            continue
+        except Exception as e:
+            print(f"\nBŁĄD: Nieoczekiwany problem z plikiem {filename}: {e}", file=sys.stderr)
+            continue
+
+    return llama_documents
+
+
+def build_index():
+    # 0. Safety Clean
+    if os.path.exists(DB_DIRECTORY):
+        print(f"Czyszczenie starego indeksu w '{DB_DIRECTORY}'...")
+        try:
+            shutil.rmtree(DB_DIRECTORY)
+        except OSError as e:
+            print(f"Nie udało się usunąć folderu: {e}")
+            # Czasami Windows blokuje pliki, jeśli proces chroma wciąż działa w tle
+            # W Dockerze/WSL powinno być ok.
+
+    if not os.path.exists(INPUT_DIR):
+        print(f"BŁĄD KRYTYCZNY: Nie znaleziono folderu {INPUT_DIR}.")
         sys.exit(1)
 
-    # --- Step 1: Load the Embedding Model & Tokenizer ---
-    print(f"Loading embedding model: {EMBED_MODEL_NAME}")
+    # 1. Device Selection
+    device = get_optimal_device()
+    print(f"Wybrane urządzenie obliczeniowe: {device.upper()}")
+
+    # 2. Load Embeddings
+    print(f"Ładowanie modelu embeddingów: {EMBED_MODEL_NAME}...")
     embed_model = HuggingFaceEmbedding(
         model_name=EMBED_MODEL_NAME,
-        device="cpu"
+        device=device
     )
-    print("Embedding model loaded.")
 
-    print(f"Loading tokenizer for: {EMBED_MODEL_NAME}")
-    # Wczytujemy tokenizer pasujący do naszego modelu embeddingów
-    tokenizer = AutoTokenizer.from_pretrained(EMBED_MODEL_NAME)
-    def hf_tokenizer_fn(text: str):
-        # return list of token ids (TokenTextSplitter only needs lenght)
-        return tokenizer.encode(text, add_special_tokens=False)
-
-    print("Tokenizer loaded.")
-
-    # --- Step 2: Set up the Vector Database (ChromaDB) ---
-    # (Ten krok jest taki sam, ale jest w nowym bloku dla porządku)
-    print(f"Initializing persistent vector database at: {DB_DIRECTORY}")
+    # 3. Prepare ChromaDB
+    print("Inicjalizacja ChromaDB...")
     db = chromadb.PersistentClient(path=DB_DIRECTORY)
     chroma_collection = db.get_or_create_collection("bomba_lore")
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    # --- Step 3: Load the Data ---
-    # (Ten krok jest taki sam)
-    print(f"Loading data from: {INPUT_FILE}")
-    documents = SimpleDirectoryReader(
-        input_files=[INPUT_FILE]
-    ).load_data()
-    print(f"Data loaded. Found {len(documents)} document(s).")
+    # 4. Load & Process Data
+    documents = load_documents_from_json(INPUT_DIR)
 
-    # --- Step 4: Define the Indexing Pipeline ---
-    # This ties everything together.
+    if not documents:
+        print("Nie znaleziono żadnych poprawnych dokumentów do zaindeksowania.")
+        return
 
-    # 4a. Node Parser (Chunking)
-    # Używamy SentenceSplitter i przekazujemy mu DOKŁADNY tokenizer
-    # To gwarantuje, że "chunk_size=256" będzie mierzone poprawną miarką.
-    print("Initializing node parser (SentenceSplitter) with tokenizer.")
-    node_parser = TokenTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        tokenizer=hf_tokenizer_fn
-    )
+    print(f"Wygenerowano {len(documents)} semantycznych fragmentów (chunks).")
 
-    # 4b. Storage Context
-    # Tells LlamaIndex WHERE to store the data (in our ChromaDB).
-    storage_context = StorageContext.from_defaults(
-        vector_store=vector_store
-    )
-
-    # --- Step 5: Build the Index ---
-    # This is the main event!
-    # LlamaIndex will automatically:
-    # 1. Take `documents`
-    # 2. Split them into chunks (using `node_parser`)
-    # 3. Convert each chunk to an embedding (using `embed_model`)
-    # 4. Store the embedding + chunk text in our `vector_store` (ChromaDB)
-    print("Building index... This may take a few minutes...")
-    print(f"Chunk Size: {CHUNK_SIZE}, Chunk Overlap: {CHUNK_OVERLAP}")
-
+    # 5. Indexing
+    print("Budowanie indeksu wektorowego...")
     index = VectorStoreIndex.from_documents(
         documents,
         storage_context=storage_context,
         embed_model=embed_model,
-        node_parser=node_parser,
         show_progress=True
     )
 
-    print("\n--- Index Build Complete! ---")
-    print(f"Vector database is persistently stored in '{DB_DIRECTORY}'")
-    #print(f"Total nodes indexed: {len(index.index_struct.nodes)}")
+    print("\n--- SUKCES ---")
+    print(f"Baza wiedzy została zapisana w: {DB_DIRECTORY}")
 
 
-# This block runs only when you execute the script directly
 if __name__ == "__main__":
-    build_persistent_index()
+    build_index()
