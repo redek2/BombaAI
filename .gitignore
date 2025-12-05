@@ -17,6 +17,7 @@ data/
 transcripts/
 transcriptions/
 transcriptions_clean/
+lore_extracted/
 
 
 chroma_db/
@@ -36,6 +37,7 @@ ffmpeg.exe
 
 cookies.txt
 cookies_opera.txt
+failed_files.txt
 
 # --- IDE and System ---
 .vscode/
